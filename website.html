@@ -1,0 +1,940 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Flower2, 
+  MapPin, 
+  Instagram, 
+  X, 
+  MessageCircle, 
+  Star, 
+  CheckCircle2, 
+  ChevronRight, 
+  ChevronLeft,
+  Sparkles, 
+  ShoppingCart, 
+  Plus, 
+  Minus, 
+  Send, 
+  Loader2, 
+  Map,
+  Wand2,
+  PenTool
+} from 'lucide-react';
+
+// Fungsi helper untuk format mata uang Rupiah
+const formatRupiah = (number) => {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+  }).format(number);
+};
+
+// --- Utilitas Gemini API dengan Exponential Backoff ---
+const fetchGeminiWithBackoff = async (url, options) => {
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let i = 0; i < 5; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error('API Error');
+      return await response.json();
+    } catch (error) {
+      if (i === 4) throw error;
+      await new Promise(r => setTimeout(r, delays[i]));
+    }
+  }
+};
+
+// --- Komponen Slider Gambar ---
+const ProductImage = ({ product }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const images = product.images || [product.image];
+
+  const nextSlide = (e) => {
+    e.stopPropagation();
+    setCurrentIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
+  };
+
+  const prevSlide = (e) => {
+    e.stopPropagation();
+    setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+  };
+
+  return (
+    <div className="relative h-80 overflow-hidden group">
+      <img 
+        src={images[currentIndex]} 
+        alt={`${product.name} - Slide ${currentIndex + 1}`} 
+        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+        onError={(e) => {e.target.src = `https://placehold.co/600x800/fbcfe8/be185d?text=${encodeURIComponent(product.name)}`}}
+      />
+      
+      {images.length > 1 && (
+        <>
+          <button 
+            onClick={prevSlide}
+            className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/80 p-1.5 rounded-full text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-white z-10"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <button 
+            onClick={nextSlide}
+            className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/80 p-1.5 rounded-full text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-white z-10"
+          >
+            <ChevronRight size={20} />
+          </button>
+
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+            {images.map((_, idx) => (
+              <div 
+                key={idx} 
+                className={`h-1.5 rounded-full transition-all ${currentIndex === idx ? 'w-4 bg-rose-500' : 'w-1.5 bg-white/60'}`}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-full text-[10px] font-black text-rose-600 uppercase tracking-widest z-10 shadow-sm">
+        {product.category}
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('Semua');
+  const [cart, setCart] = useState([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [rentalDate, setRentalDate] = useState('');
+  const [rentalDays, setRentalDays] = useState(1);
+  const [checkoutStatus, setCheckoutStatus] = useState(''); 
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  // --- Gemini AI States ---
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([
+    { role: 'assistant', text: 'Konnichiwa Kakak! 🌸 Aku Lupyy si AI pintar. Mau dibantu cari Yukata untuk acaramu? ✨' }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  // Fitur Auto-scroll ke pesan terbaru
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatMessages, isTyping]);
+
+  // Stylist AI Feature
+  const [isStylistOpen, setIsStylistOpen] = useState(false);
+  const [stylistInput, setStylistInput] = useState('');
+  const [stylistResult, setStylistResult] = useState('');
+  const [isStylistLoading, setIsStylistLoading] = useState(false);
+
+  // Caption AI Feature
+  const [igCaption, setIgCaption] = useState('');
+  const [isCaptionLoading, setIsCaptionLoading] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 20);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const IG_USERNAME = "asahi_bunkata"; 
+  const WA_NUMBER_1 = "62882007425983";
+  const WA_NUMBER_2 = "6285198261271"; // Ganti dengan nomor admin ke-2
+  const apiKey = ""; 
+  
+  const addToCart = (product) => {
+    setCart(prev => {
+      const existing = prev.find(item => item.id === product.id);
+      if (existing) return prev; 
+      return [...prev, { ...product, quantity: 1 }];
+    });
+    setIsCartOpen(true);
+  };
+
+  const updateQuantity = (id, delta) => {
+    setCart(prev => prev.map(item => {
+      if (item.id === id) {
+        return { ...item, quantity: Math.min(1, Math.max(0, item.quantity + delta)) }; 
+      }
+      return item;
+    }).filter(item => item.quantity > 0));
+  };
+
+  const cartBaseTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const cartTotal = cartBaseTotal; 
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const handleCheckout = async () => {
+    if (cart.length === 0 || !rentalDate) return;
+    setCheckoutStatus('copying');
+    
+    let message = `Halo Admin Asahi Bunkata 🌸,\nSaya ingin menyewa:\n\n`;
+    cart.forEach((item, index) => {
+      message += `${index + 1}. ${item.name} (x${item.quantity})\n`;
+    });
+    
+    let dateFormatted = new Date(rentalDate).toLocaleDateString('id-ID', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    message += `\n📅 Tanggal Sewa: ${dateFormatted}`;
+    message += `\n⏱️ Durasi: ${rentalDays} Hari`;
+    message += `\n*Total Estimasi: ${formatRupiah(cartTotal)}*\n\nApakah barang tersedia? ✨`;
+    
+    try {
+      await navigator.clipboard.writeText(message);
+    } catch (err) {
+      const textArea = document.createElement("textarea");
+      textArea.value = message;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+
+    setCheckoutStatus('done');
+    setTimeout(() => {
+      window.open(`https://ig.me/m/${IG_USERNAME}`, '_blank');
+      setCheckoutStatus('');
+    }, 2000);
+  };
+
+  const products = [
+    // 13 Yukata Wanita 
+    { id: 1, name: "Yukata Wanita - W-001", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/a4/6e/b8/a46eb8484ddf594025b7398fb19c8ae1.jpg","https://i.pinimg.com/736x/d7/08/a3/d708a32a0d2580c68c9cec93d9de4fdc.jpg"], description: "Warna putih dengan pola gelombang dan floral berwarna biru tua yang elegan." },
+    { id: 2, name: "Yukata Wanita - W-002", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/94/38/c2/9438c2a00cfa68196cd2ccb1079c354f.jpg" ],  description: "Putih cerah yang dihiasi dengan motif floral yang cantik dalam palet warna merah muda, dan merah." },
+    { id: 3, name: "Yukata Wanita - W-003", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/d7/fa/0c/d7fa0c442e872a7d568f15cec2151ede.jpg", "https://i.pinimg.com/736x/63/4e/bb/634ebbcdb9ee469e65fc948cfcf80131.jpg" ], description: "Motif floral merah dan biru yang menyejukkan mata." },
+    { id: 4, name: "Yukata Wanita - W-004", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/0a/d6/ef/0ad6ef5702624e3b1f6aaae98cc169e7.jpg", "https://i.pinimg.com/736x/8f/18/9a/8f189ad552998b127c2e1f80db55d969.jpg" ], description: "Warna navy elegan yang dihiasi motif sakura pink putih dan kupu-kupu yang rimbun." },
+    { id: 5, name: "Yukata Wanita - W-005", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/1a/75/22/1a7522a4e993bbdb3787459fcc6dbfa9.jpg", "https://i.pinimg.com/736x/b0/bc/3b/b0bc3ba2cfb7444a83bf79a6ceb7de47.jpg" ], description: "Ungu lembut dengan corak bunga lavender yang anggun." },
+    { id: 6, name: "Yukata Wanita - W-006", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/ea/8d/08/ea8d088e326e47bacaba321acfbbd6fc.jpg", "https://i.pinimg.com/736x/64/d1/41/64d14186f8dee10312029aeac91d7e68.jpg" ], description: "Warna krem lembut dengan motif mawar vintage pink dan daun hijau memberikan kesan klasik, manis, dan feminin." },
+    { id: 7, name: "Yukata Wanita - W-007", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/6b/25/ce/6b25ce92dcc4ec6b642d0220c65d0040.jpg", "https://i.pinimg.com/736x/95/f7/5c/95f75c85fadbe410f044d7f36fbfc754.jpg" ], description: "Warna navy dipadukan dengan bunga biru, memberikan kesan sejuk." },
+    { id: 8, name: "Yukata Wanita - W-008", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/12/56/20/12562051e572547ce4d4f8d5445e3229.jpg", "https://i.pinimg.com/736x/62/93/6e/62936eac93f49caa699df9188265206a.jpg" ], description: "Perpaduan warna biru elegan dengan motif bunga klasik menciptakan tampilan anggun dan berkelas." },
+    { id: 9, name: "Yukata Wanita - W-009", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/b0/e4/31/b0e43117ea4a1880fa28577258fceb55.jpg" , "https://i.pinimg.com/736x/4b/20/cd/4b20cd2d5310131cc65912f65abc790c.jpg", "https://i.pinimg.com/736x/66/cd/81/66cd81526ceac61599b2b7774f67a126.jpg" ], description: "Warna musim semi dengan perpaduan bunga dan kupu-kupu yang memberikan kesan feminim." },
+    { id: 10, name: "Yukata Wanita - W-010", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/50/35/c4/5035c46811194990ea4e197e2e40d7f0.jpg", "https://i.pinimg.com/736x/68/67/19/68671940e6f3a1f4a383831f203e0d94.jpg", "https://i.pinimg.com/736x/dc/40/03/dc4003ac9309fd0ec84a036057262849.jpg" ], description: "Warna biru yang dipadukan dengan motif bunga yang cantik, memberikan kesan yang tenang dan menawan." },
+    { id: 11, name: "Yukata Wanita - W-011", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/de/5c/45/de5c456fae5c45cf8fe3297989570b18.jpg", "https://i.pinimg.com/736x/11/54/cb/1154cb091fa02ab451ce659bc94b67f4.jpg" ], description: "Warna biru laut dengan motif kupu-kupu cantik yang menawan." },
+    { id: 12, name: "Yukata Wanita - W-012", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/53/b3/4f/53b34f22fe5341c7233801fbd88a758c.jpg", "https://i.pinimg.com/736x/ee/0a/02/ee0a02beb4b908e87f0a6ea995077ba4.jpg" ], description: "Perpaduan warna hitam putih dengan corak dedaunan yang menyegarkan." },
+    { id: 19, name: "Yukata Wanita - W-013", category: "Yukata Wanita", price: 85000, images: ["https://i.pinimg.com/736x/a3/e3/07/a3e307c9aca54891a5de79f32098a6d5.jpg" ], description: "Warna musim dingin yang memberikan nuansa sejuk dan anggun." },
+
+    // 6 Yukata Pria 
+    { 
+      id: 13, 
+      name: "Yukata Pria - P-001", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/6b/11/ec/6b11ecb2d032f77db059d06c30771958.jpg",
+        "https://i.pinimg.com/736x/45/6e/be/456ebe7bd048959a5c5a233723f8b5ea.jpg",
+        "https://i.pinimg.com/736x/9f/4c/17/9f4c176810ba7d037f02b7422d51eaa4.jpg",
+        "https://i.pinimg.com/736x/fd/ce/95/fdce951e8464cb1fb78a361978efd201.jpg"
+      ], 
+      description: "Biru dongker klasik dengan motif geometris yang maskulin." 
+    },
+    { 
+      id: 14, 
+      name: "Yukata Pria - P-002", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/f9/dd/a5/f9dda5560b3bbe229d06ac55de5fa68e.jpg",
+        "https://i.pinimg.com/736x/5a/02/5e/5a025e66b19ca0a62c792bf1df1f286e.jpg",
+        "https://i.pinimg.com/736x/9f/4c/17/9f4c176810ba7d037f02b7422d51eaa4.jpg",
+        "https://i.pinimg.com/736x/50/2e/10/502e1070cece61db8aed6f74eccd2bcb.jpg"
+      ], 
+      description: "Hitam pekat tanpa motif, memberikan kesan gagah dan misterius." 
+    },
+    { 
+      id: 15, 
+      name: "Yukata Pria - P-003", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/9e/51/67/9e516782618f7af11b7fd6818d195986.jpg",
+        "https://i.pinimg.com/736x/8b/39/be/8b39be0a82f53a2100ce4b00fcc1af69.jpg",
+        "https://i.pinimg.com/736x/ad/1e/84/ad1e841e3c9b1036520b0809c4d97e60.jpg",
+        "https://i.pinimg.com/736x/66/cd/81/66cd81526ceac61599b2b7774f67a126.jpg"
+      ], 
+      description: "Biru navy bermotif geometris klasik. Tampil gagah, autentik, dan nyaman seharian di festival." 
+    },
+    { 
+      id: 16, 
+      name: "Yukata Pria - P-004", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/d9/65/9d/d9659dd666f128fd68816d3f617367d9.jpg",
+        "https://i.pinimg.com/736x/f5/0c/b3/f50cb30938538359e19928dbc0227576.jpg",
+        "https://i.pinimg.com/736x/f1/5f/73/f15f7366f2362ed95bb7401e3a44694f.jpg",
+      ], 
+      description: "Abu-abu tua arang yang sangat cocok untuk tampilan formal." 
+    },
+    { 
+      id: 17, 
+      name: "Yukata Pria - P-005", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/dc/97/d6/dc97d6fb02ea25625daab060e2d64b54.jpg",
+        "https://i.pinimg.com/736x/4d/3b/14/4d3b140a0b7abfafc437804958d30a87.jpg",
+        "https://i.pinimg.com/736x/dc/40/03/dc4003ac9309fd0ec84a036057262849.jpg",
+      ], 
+      description: "Perpaduan garis abu-abu dan biru yang nyaman. Tampil kasual dan maskulin di setiap acara." 
+    },
+    { 
+      id: 18, 
+      name: "Yukata Pria - P-006", 
+      category: "Yukata Pria", 
+      price: 85000, 
+      images: [
+        "https://i.pinimg.com/736x/d0/8f/67/d08f67eb700edd1e69326243333bda3f.jpg",
+        "https://i.pinimg.com/736x/d7/44/d9/d744d99de1e905ed313258c4b25b90b0.jpg"
+      ], 
+      description: "Biru terang yang dinamis, cocok untuk festival luar ruangan." 
+    }
+  ];
+
+  // String katalog untuk prompt AI
+  const catalogText = products.map(p => `- ${p.name} (${p.category}): Rp ${formatRupiah(p.price)}. Deskripsi: ${p.description}`).join('\n');
+
+  const handleSendChatMessage = async (e) => {
+    e?.preventDefault();
+    if (!chatInput.trim() || isTyping) return;
+    const userText = chatInput.trim();
+    
+    // Simpan pesan user ke state
+    setChatMessages(prev => [...prev, { role: 'user', text: userText }]);
+    setChatInput('');
+    setIsTyping(true);
+    
+    const systemPrompt = `Kamu adalah Lupyy, maskot berang-berang pink yang imut, ramah, dan ceria dari toko sewa pakaian tradisional Jepang "Asahi Bunkata" di Semarang.
+    Tugasmu adalah mengobrol santai dengan pengunjung, menjawab pertanyaan mereka, dan membantu mereka memilih Yukata. Gunakan bahasa Indonesia yang gaul, sopan, hangat, dan banyak emoji 🌸✨🦦. Jangan memberikan jawaban yang terlalu panjang seperti robot, buat seperti chatting sungguhan dengan teman. Jika cocok, akhiri jawabanmu dengan pertanyaan balik untuk mengajak mereka mengobrol (misal: "Kakak rencananya mau pakai untuk acara apa nih?").
+
+    INFORMASI PENTING TENTANG ASAHI BUNKATA:
+    - Harga Sewa: Tarif FLAT Rp 85.000 untuk durasi sewa 1 hingga 3 hari. (Ini sangat hemat karena tidak dihitung harian!). Jika ingin sewa lebih dari 3 hari, arahkan pelanggan untuk konfirmasi via DM Instagram admin.
+    - Lokasi Galeri: Gedung B4 Fakultas Bahasa dan Seni (FBS) UNNES, Sekaran, Gunung Pati, Kota Semarang, Jawa Tengah.
+    - Jam Operasional: Senin - Minggu, pukul 09:00 - 21:00 WIB. Hari Libur Nasional tetap buka dan melayani!
+    - Kontak Admin: WhatsApp di nomor 6285742656520, atau Instagram di @asahi_bunkata.
+    - Cara Pesan/Sewa: Pelanggan bisa klik tombol "Keranjang" di bawah baju pilihan mereka, buka keranjang di kanan atas, pilih tanggal sewa, centang syarat & ketentuan, lalu klik tombol "Checkout via Instagram". Sistem otomatis menyalin detail pesanan, pelanggan tinggal mem-paste pesanan tersebut di DM Instagram Asahi Bunkata yang terbuka.
+
+    EDUKASI BUDAYA (Gunakan jika ditanya):
+    - Yukata: Pakaian tradisional musim panas Jepang dari katun ringan. Sangat sejuk, menyerap keringat, beda dengan Kimono yang tebal dan berlapis-lapis.
+    - Sejarah Yukata: Berasal dari "Yukatabira" (baju mandi bangsawan zaman Heian setelah mandi di onsen). Berevolusi jadi baju luar yang modis di zaman Edo.
+    - Momen Penggunaan: Cocok untuk festival kembang api (Hanabi Taikai), festival musim panas (Natsu Matsuri), atau acara Jejepangan/Cosplay di Indonesia.
+    - Aksesoris Pelengkap: 
+        1. Obi: Sabuk kain untuk mengunci Yukata.
+        2. Geta: Alas kaki/sandal tradisional Jepang bergaya jepit yang bersuara "karankoron" saat dipakai berjalan.
+        3. Kanzashi: Jepit rambut ornamen bunga untuk wanita agar leher terasa sejuk dan elegan.
+        4. Uchiwa: Kipas bundar tradisional yang sering diselipkan di Obi saat tidak dipakai.
+
+    KATALOG YUKATA KAMI (Gunakan untuk merekomendasikan baju):
+    ${catalogText}
+    
+    Ingat: Selalu asumsikan kamu sedang berbicara langsung dengan pelanggan di website Asahi Bunkata.`;
+
+    // Menyusun riwayat percakapan yang valid untuk Gemini API 
+    // Menyederhanakan logika untuk mencegah error urutan role
+    const apiContents = [];
+    
+    // API Gemini menolak role 'assistant' di awal, jadi kita mulai mapping dari pesan 'user' pertama
+    // Atau jika chatMessages hanya berisi sapaan awal, abaikan saja riwayatnya.
+    const userMessagesExist = chatMessages.some(m => m.role === 'user');
+    
+    if (userMessagesExist) {
+        let currentRole = null;
+        // Cari index pesan user pertama
+        const startIndex = chatMessages.findIndex(m => m.role === 'user');
+        
+        for (let i = startIndex; i < chatMessages.length; i++) {
+            const msgRole = chatMessages[i].role === 'assistant' ? 'model' : 'user';
+            
+            if (msgRole === currentRole) {
+                // Jika role berturut-turut sama, gabungkan teksnya
+                apiContents[apiContents.length - 1].parts[0].text += '\n\n' + chatMessages[i].text;
+            } else {
+                // Jika role berganti, buat entry baru
+                apiContents.push({ role: msgRole, parts: [{ text: chatMessages[i].text }] });
+                currentRole = msgRole;
+            }
+        }
+        
+        // Tambahkan pesan user yang baru
+        if (currentRole === 'user') {
+            apiContents[apiContents.length - 1].parts[0].text += '\n\n' + userText;
+        } else {
+            apiContents.push({ role: 'user', parts: [{ text: userText }] });
+        }
+    } else {
+        // Jika belum ada riwayat (ini pesan pertama user), langsung kirim
+        apiContents.push({ role: 'user', parts: [{ text: userText }] });
+    }
+
+
+    try {
+      const data = await fetchGeminiWithBackoff(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: apiContents,
+          systemInstruction: { parts: [{ text: systemPrompt }] }
+        })
+      });
+      const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf Kak, Lupyy lagi bingung! 😵‍💫";
+      setChatMessages(prev => [...prev, { role: 'assistant', text: replyText }]);
+    } catch (error) {
+      setChatMessages(prev => [...prev, { role: 'assistant', text: "Koneksi terputus! Mohon coba lagi ya Kak 🥲" }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const handleStylistAI = async () => {
+    if (!stylistInput.trim() || isStylistLoading) return;
+    setIsStylistLoading(true);
+
+    const prompt = `Sebagai Fashion Stylist ahli dari Asahi Bunkata, rekomendasikan 1 atau maksimal 2 Yukata dari katalog kami berdasarkan preferensi atau deskripsi acara pengguna berikut: "${stylistInput}".
+    Katalog kami:
+    ${catalogText}
+    
+    Aturan:
+    1. Pilih baju yang paling relevan dengan deskripsi mereka. Sebutkan nama bajunya secara spesifik.
+    2. Berikan alasan yang menarik dan meyakinkan kenapa baju itu cocok untuk mereka (sebutkan kecocokan warna, nuansa acara, dsb).
+    3. Gunakan bahasa yang gaul, estetik, hangat, dan profesional. Sertakan emoji ✨🌸.`;
+
+    try {
+      const data = await fetchGeminiWithBackoff(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, Stylist AI kami sedang offline. Coba sebentar lagi ya!";
+      setStylistResult(replyText);
+    } catch (error) {
+      setStylistResult("Ups, ada kendala koneksi saat menghubungi AI Stylist. Mohon coba lagi.");
+    } finally {
+      setIsStylistLoading(false);
+    }
+  };
+
+  const handleGenerateCaption = async () => {
+    if (cart.length === 0 || isCaptionLoading) return;
+    setIsCaptionLoading(true);
+
+    const itemNames = cart.map(item => item.name).join(', ');
+    const prompt = `Saya baru saja menyewa pakaian Jepang berikut: ${itemNames} dari Asahi Bunkata. Buatkan saya draf caption Instagram yang sangat estetik, gaul, tapi tetap sopan untuk foto-foto saya memakai baju ini nanti. Buat dalam bahasa Indonesia, sertakan hashtag yang relevan, dan gunakan emoji yang cocok (seperti 🌸🍡✨). Buat 2 opsi caption: opsi 1 puitis/estetik, opsi 2 ceria/kasual.`;
+
+    try {
+      const data = await fetchGeminiWithBackoff(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Gagal membuat caption.";
+      setIgCaption(replyText);
+    } catch (error) {
+      setIgCaption("Gagal menghubungi AI pembuat Caption. Coba lagi.");
+    } finally {
+      setIsCaptionLoading(false);
+    }
+  };
+
+  const filteredProducts = activeFilter === "Semua" ? products : products.filter(p => p.category === activeFilter);
+
+  const displayItems = [
+    { img: "https://i.pinimg.com/736x/54/62/72/546272ea953ad1e621b35f27ecdbde6e.jpg", title: "Anggun & Elegan" },
+    { img: "https://i.pinimg.com/736x/40/60/05/406005d9a15be8c9585f8eb1e6279d61.jpg", title: "Momen Berkesan" },
+    { img: "https://i.pinimg.com/736x/27/11/5d/27115ddde80d2f11a98e49ff91ac4e63.jpg", title: "Simfoni Hujan" },
+    { img: "https://i.pinimg.com/736x/66/cd/81/66cd81526ceac61599b2b7774f67a126.jpg", title: "Pesona Tradisional" }
+  ];
+
+  return (
+    <div className="min-h-screen bg-pink-50 font-sans text-slate-800">
+      {/* Navigasi Utama */}
+      <nav className={`fixed w-full z-50 transition-all duration-300 ${isScrolled ? 'bg-white/90 backdrop-blur-md shadow-sm py-3' : 'bg-transparent py-5'}`}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center space-x-3 cursor-pointer" onClick={() => window.scrollTo({top: 0, behavior: 'smooth'})}>
+              <img src="https://i.pinimg.com/236x/e3/f3/65/e3f36521913ef69bf47bc0d12efe4dad.jpg" alt="Logo Asahi" className="h-10 w-auto object-contain" />
+              <span className="text-2xl font-bold bg-gradient-to-r from-rose-500 to-pink-500 bg-clip-text text-transparent uppercase tracking-tighter">Asahi Bunkata</span>
+            </div>
+            <div className="hidden md:flex items-center space-x-8 text-sm font-bold">
+              <a href="#home" className="text-gray-600 hover:text-rose-500 transition-colors">Beranda</a>
+              <a href="#edukasi" className="text-gray-600 hover:text-rose-500 transition-colors">Info</a>
+              <a href="#katalog" className="text-gray-600 hover:text-rose-500 transition-colors">Katalog</a>
+              <a href="#lokasi" className="text-gray-600 hover:text-rose-500 transition-colors">Lokasi</a>
+              <button onClick={() => setIsCartOpen(true)} className="relative p-2 text-gray-600 hover:text-rose-500 transition-colors">
+                <ShoppingCart className="h-6 w-6" />
+                {cartCount > 0 && <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] rounded-full h-5 w-5 flex items-center justify-center border-2 border-white">{cartCount}</span>}
+              </button>
+              <a href="#kontak" className="px-5 py-2.5 bg-rose-500 text-white rounded-full font-medium hover:bg-rose-600 transition-all shadow-md">Hubungi Kami</a>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Hero Section */}
+      <section id="home" className="relative pt-20 overflow-hidden text-center">
+        <div className="w-full h-[50vh] md:h-[65vh] relative overflow-hidden group">
+          <img 
+            src="https://i.pinimg.com/736x/d3/4b/4a/d34b4a21b9c9bf44b19616efab8fe39c.jpg" 
+            alt="Landscape Header Asahi Bunkata" 
+            className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-pink-900/10 to-pink-50"></div>
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 hidden md:block">
+            <div className="bg-white/90 backdrop-blur-sm px-6 py-3 rounded-full border border-pink-200 shadow-xl flex items-center space-x-3">
+              <MapPin className="h-5 w-5 text-rose-500" />
+              <span className="text-sm font-bold text-slate-700">Lokasi : FBS UNNES, Semarang</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="max-w-4xl mx-auto px-4 text-center mt-10 mb-16 relative z-10">
+          <h1 className="text-4xl md:text-6xl font-extrabold text-gray-900 mb-6 leading-tight tracking-tight">
+            Sewa <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-pink-500">Yukata</span><br/>Terbaik di Kota Semarang
+          </h1>
+          <p className="text-lg md:text-xl text-gray-600 mb-10 max-w-2xl mx-auto leading-relaxed">
+            Hadirkan nuansa autentik Jepang di setiap momenmu. Koleksi premium kami siap melengkapi festival, cosplay, dan sesi fotomu.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <a href="#katalog" className="px-10 py-4 bg-rose-500 text-white rounded-full font-bold text-lg hover:bg-rose-600 transition-all shadow-xl shadow-rose-200 inline-flex items-center justify-center">
+              Lihat Katalog <ChevronRight className="ml-2 h-5 w-5" />
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Inspirasi Gaya (Display) Section */}
+      <section className="py-12 bg-white print:hidden">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="text-center mb-10">
+             <h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase">Inspirasi Gaya</h2>
+             <p className="text-sm text-gray-500 mt-2">Koleksi foto terbaik dengan busana tradisional kami</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+            {displayItems.map((item, idx) => (
+              <div key={idx} className="relative h-64 md:h-72 lg:h-80 rounded-3xl overflow-hidden shadow-lg group cursor-pointer border border-pink-50 transition-all hover:shadow-xl">
+                <img src={item.img} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-1000" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-40 group-hover:opacity-100 transition-opacity duration-500"></div>
+                <div className="absolute bottom-0 left-0 w-full p-6 md:p-8 transform translate-y-2 group-hover:translate-y-0 transition-transform duration-500">
+                  <h3 className="text-white font-black text-xl md:text-2xl tracking-wide uppercase italic">{item.title}</h3>
+                  <div className="w-0 group-hover:w-12 h-1 bg-rose-500 transition-all duration-700 delay-100 mt-2"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Info Section */}
+      <section id="edukasi" className="py-24 bg-white border-y border-pink-100">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-black text-gray-900 mb-4 uppercase tracking-tighter">Mengenal Yukata</h2>
+            <div className="w-20 h-1.5 bg-rose-500 mx-auto rounded-full mb-6"></div>
+            <p className="text-gray-500 max-w-2xl mx-auto text-lg leading-relaxed">Selami keindahan budaya musim panas Jepang sebelum Anda mengenakannya. Setiap helai pakaian memiliki cerita dan tradisinya sendiri.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-left mb-16">
+            <div className="bg-pink-50/50 p-8 md:p-10 rounded-[2rem] border border-pink-100 hover:shadow-xl transition-all group">
+              <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
+                <Flower2 className="w-8 h-8 text-rose-500" />
+              </div>
+              <h3 className="font-black text-xl mb-4 uppercase tracking-tight">Apa itu Yukata?</h3>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Yukata (浴衣) adalah pakaian tradisional Jepang yang terbuat dari katun ringan. Berbeda dengan Kimono yang berlapis dan berbahan tebal, Yukata dirancang khusus untuk musim panas sehingga sangat sejuk, menyerap keringat, dan bebas bergerak. Sangat identik dengan kemeriahan festival kembang api (Hanabi) dan tarian musim panas.
+              </p>
+            </div>
+
+            <div className="bg-pink-50/50 p-8 md:p-10 rounded-[2rem] border border-pink-100 hover:shadow-xl transition-all group">
+              <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
+                <Star className="w-8 h-8 text-rose-500" />
+              </div>
+              <h3 className="font-black text-xl mb-4 uppercase tracking-tight">Jejak Sejarah</h3>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Kata "Yukata" berasal dari kata "Yukatabira" yang berarti pakaian mandi. Pada zaman Heian, kaum bangsawan mengenakannya setelah berendam di pemandian air panas (onsen). Seiring berkembangnya teknik pewarnaan di zaman Edo, Yukata bertransformasi menjadi busana luar ruangan yang modis dan merakyat bagi seluruh kalangan.
+              </p>
+            </div>
+
+            <div className="bg-pink-50/50 p-8 md:p-10 rounded-[2rem] border border-pink-100 hover:shadow-xl transition-all group">
+              <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
+                <Sparkles className="w-8 h-8 text-rose-500" />
+              </div>
+              <h3 className="font-black text-xl mb-4 uppercase tracking-tight">Momen Penggunaan</h3>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Yukata sangat identik dengan musim panas di Jepang. Pakaian ini lazim dikenakan saat menghadiri festival musim panas (Natsu Matsuri), festival kembang api (Hanabi Taikai), acara budaya, pameran Jejepangan, atau sekadar bersantai menikmati malam yang hangat.
+              </p>
+            </div>
+          </div>
+
+          {/* Aksesoris Pelengkap Section */}
+          <div className="bg-slate-900 rounded-[2.5rem] p-8 md:p-12 text-white overflow-hidden relative shadow-2xl">
+            {/* Dekorasi Cahaya Latar */}
+            <div className="absolute top-0 right-0 w-64 h-64 bg-rose-500/20 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-pink-500/20 rounded-full blur-3xl translate-y-1/3 -translate-x-1/3"></div>
+            
+            <div className="relative z-10">
+              <h3 className="text-2xl md:text-3xl font-black mb-10 text-center uppercase tracking-tighter">Aksesoris Pelengkap Penampilan</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                <div className="text-center md:text-left bg-white/5 p-6 rounded-3xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <div className="bg-rose-500 w-12 h-12 rounded-xl flex items-center justify-center mb-4 mx-auto md:mx-0 shadow-lg">
+                    <span className="text-2xl">🎀</span>
+                  </div>
+                  <h4 className="font-bold text-rose-300 text-lg mb-2">Obi (Sabuk)</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">Sabuk pinggang kain yang mengunci Yukata. Cara mengikat obi (musubi) memiliki banyak seni ikatan yang mempercantik postur tubuh dan punggung.</p>
+                </div>
+                <div className="text-center md:text-left bg-white/5 p-6 rounded-3xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <div className="bg-rose-500 w-12 h-12 rounded-xl flex items-center justify-center mb-4 mx-auto md:mx-0 shadow-lg">
+                    <span className="text-2xl">👡</span>
+                  </div>
+                  <h4 className="font-bold text-rose-300 text-lg mb-2">Geta Jepang</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">Alas kaki tradisional bergaya jepit. Sering dikenakan bersama Yukata dan menghasilkan suara kayu "karankoron" yang berkesan saat berjalan.</p>
+                </div>
+                <div className="text-center md:text-left bg-white/5 p-6 rounded-3xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <div className="bg-rose-500 w-12 h-12 rounded-xl flex items-center justify-center mb-4 mx-auto md:mx-0 shadow-lg">
+                    <span className="text-2xl">🌸</span>
+                  </div>
+                  <h4 className="font-bold text-rose-300 text-lg mb-2">Kanzashi</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">Jepit ornamen bunga cantik untuk wanita. Menambah nuansa elegan ketika rambut digelung ke atas agar bagian leher terasa sejuk.</p>
+                </div>
+                <div className="text-center md:text-left bg-white/5 p-6 rounded-3xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <div className="bg-rose-500 w-12 h-12 rounded-xl flex items-center justify-center mb-4 mx-auto md:mx-0 shadow-lg">
+                    <span className="text-2xl">🪭</span>
+                  </div>
+                  <h4 className="font-bold text-rose-300 text-lg mb-2">Uchiwa Kipas</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">Kipas bundar tradisional untuk menghalau panas, biasanya dengan estetik diselipkan di bagian sabuk (Obi) saat sedang tidak dipakai.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Katalog Section dengan AI Stylist */}
+      <section id="katalog" className="py-20 bg-pink-50">
+        <div className="max-w-7xl mx-auto px-4 text-center">
+          <h2 className="text-3xl font-bold text-gray-900 mb-8 tracking-tight uppercase">Koleksi Pakaian</h2>
+          
+          {/* Fitur Stylist AI */}
+          <div className="mb-10 max-w-2xl mx-auto">
+            {!isStylistOpen ? (
+              <button 
+                onClick={() => setIsStylistOpen(true)}
+                className="bg-white border-2 border-rose-200 text-rose-600 px-6 py-3 rounded-full font-bold text-sm hover:bg-rose-50 transition-all flex items-center justify-center mx-auto shadow-sm"
+              >
+                <Wand2 className="w-4 h-4 mr-2" /> ✨ Bingung Pilih Baju? Tanya Stylist AI Kami!
+              </button>
+            ) : (
+              <div className="bg-white p-6 rounded-3xl shadow-lg border border-pink-200 text-left animate-in fade-in slide-in-from-top-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-rose-600 flex items-center"><Sparkles className="w-5 h-5 mr-2" /> Stylist AI Asahi Bunkata</h3>
+                  <button onClick={() => {setIsStylistOpen(false); setStylistResult(''); setStylistInput('');}} className="text-gray-400 hover:text-rose-500"><X className="w-5 h-5" /></button>
+                </div>
+                <p className="text-xs text-gray-500 mb-4">Ceritakan acara yang akan kamu datangi, warna favoritmu, atau warna kulitmu. AI kami akan mencarikan Yukata yang paling cocok!</p>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={stylistInput}
+                    onChange={(e) => setStylistInput(e.target.value)}
+                    placeholder="Contoh: Saya mau ke festival, kulit kuning langsat, suka warna gelap..." 
+                    className="flex-1 bg-pink-50 border border-pink-100 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    disabled={isStylistLoading}
+                  />
+                  <button 
+                    onClick={handleStylistAI}
+                    disabled={isStylistLoading || !stylistInput.trim()}
+                    className="bg-rose-500 text-white px-5 py-2 rounded-xl font-bold hover:bg-rose-600 disabled:bg-rose-300 transition-all flex items-center"
+                  >
+                    {isStylistLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Cari ✨'}
+                  </button>
+                </div>
+                {stylistResult && (
+                  <div className="mt-4 p-4 bg-rose-50/50 rounded-xl border border-rose-100 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                    {stylistResult}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap justify-center gap-2 mb-10">
+            {["Semua", "Yukata Wanita", "Yukata Pria"].map(f => (
+              <button key={f} onClick={() => setActiveFilter(f)} className={`px-6 py-2 rounded-full text-xs font-bold transition-all ${activeFilter === f ? 'bg-rose-500 text-white shadow-md' : 'bg-white text-gray-600 hover:bg-pink-100'}`}>{f}</button>
+            ))}
+          </div>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 text-left">
+            {filteredProducts.map((p, index) => {
+              const inCart = cart.some(item => item.id === p.id);
+              const showWanitaHeader = activeFilter === 'Semua' && index === 0;
+              const showPriaHeader = activeFilter === 'Semua' && p.category === 'Yukata Pria' && filteredProducts[index - 1]?.category !== 'Yukata Pria';
+
+              return (
+              <React.Fragment key={p.id}>
+                {showWanitaHeader && (
+                  <div className="col-span-1 sm:col-span-2 lg:col-span-3 flex items-center justify-center mt-2 mb-4">
+                    <div className="flex-grow border-t-2 border-rose-100"></div>
+                    <span className="px-6 py-2 bg-rose-50 text-rose-600 rounded-full text-sm font-black uppercase tracking-widest border border-rose-100 shadow-sm whitespace-nowrap">
+                      🌸 Koleksi Wanita 🌸
+                    </span>
+                    <div className="flex-grow border-t-2 border-rose-100"></div>
+                  </div>
+                )}
+                {showPriaHeader && (
+                  <div className="col-span-1 sm:col-span-2 lg:col-span-3 flex items-center justify-center mt-10 mb-4">
+                    <div className="flex-grow border-t-2 border-rose-100"></div>
+                    <span className="px-6 py-2 bg-slate-50 text-slate-700 rounded-full text-sm font-black uppercase tracking-widest border border-slate-200 shadow-sm whitespace-nowrap">
+                      🎌 Koleksi Pria 🎌
+                    </span>
+                    <div className="flex-grow border-t-2 border-rose-100"></div>
+                  </div>
+                )}
+              <div className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-pink-100 group flex flex-col">
+                <ProductImage product={p} />
+                <div className="p-6 flex-1 flex flex-col">
+                  <h3 className="font-bold text-gray-900 mb-2 leading-tight">{p.name}</h3>
+                  <p className="text-gray-500 text-xs mb-6 line-clamp-2 leading-relaxed">{p.description}</p>
+                  <div className="mt-auto flex justify-between items-center pt-4 border-t border-gray-100">
+                    <div className="flex flex-col">
+                      <span className="text-xl font-black text-rose-500">{formatRupiah(p.price)}</span>
+                      <span className="text-[10px] text-gray-400 font-bold tracking-widest uppercase">Per 3 Hari</span>
+                    </div>
+                    <button 
+                      onClick={() => addToCart(p)} 
+                      disabled={inCart}
+                      className={`px-4 py-2 rounded-full text-xs font-bold transition-colors flex items-center ${inCart ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-pink-100 text-rose-600 hover:bg-rose-500 hover:text-white'}`}
+                    >
+                      {inCart ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <Plus className="w-3 h-3 mr-1" />} 
+                      {inCart ? 'Dipilih' : 'Keranjang'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              </React.Fragment>
+            )})}
+          </div>
+        </div>
+      </section>
+
+      {/* Lokasi Section */}
+      <section id="lokasi" className="py-20 bg-white border-t border-pink-100 text-center">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="inline-flex p-3 bg-rose-100 rounded-full mb-4 text-rose-500"><Map className="w-8 h-8" /></div>
+          <h2 className="text-3xl font-bold mb-4 tracking-tight uppercase">Galeri Kami</h2>
+          <p className="text-gray-600 mb-8 text-sm italic font-medium">Fakultas Bahasa dan Seni (FBS) UNNES, Sekaran, Semarang.</p>
+          <div className="bg-white p-2 rounded-3xl shadow-lg border border-pink-200 max-w-4xl mx-auto overflow-hidden">
+            <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3959.667227805443!2d110.39113627414342!3d-7.048333969064039!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x2e708bc155555555%3A0x1b8b56d2e2397635!2sFakultas%20Bahasa%20dan%20Seni%20(FBS)%20UNNES!5e0!3m2!1sid!2sid!4v1771653078610!5m2!1sid!2sid" width="100%" height="400" style={{ border: 0 }} allowFullScreen={true} loading="lazy" referrerPolicy="no-referrer-when-downgrade" title="Maps" className="rounded-2xl"></iframe>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer Utama */}
+      <footer id="kontak" className="bg-slate-900 text-white pt-16 pb-8 border-t-8 border-rose-500">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-3 gap-12 mb-12">
+          <div>
+            <div className="flex items-center space-x-3 mb-6">
+              <img src="https://i.pinimg.com/236x/e3/f3/65/e3f36521913ef69bf47bc0d12efe4dad.jpg" alt="Logo Asahi" className="h-10 w-auto object-contain bg-white rounded-lg p-1" />
+              <span className="text-2xl font-bold tracking-tighter uppercase">Asahi Bunkata</span>
+            </div>
+            <p className="text-slate-400 text-sm leading-relaxed">Pusat penyewaan pakaian tradisional Jepang paling terpercaya di Semarang untuk festival dan photoshoot.</p>
+          </div>
+          <div>
+            <h3 className="text-lg font-bold mb-6 text-rose-400 underline underline-offset-8 decoration-rose-500/30 uppercase">Hubungi Kami</h3>
+            <ul className="space-y-4 text-sm text-slate-300">
+              <li className="flex items-start space-x-3 font-medium"><MapPin className="h-5 w-5 text-rose-500 flex-shrink-0" /><span>Gedung B4 FBS UNNES, Kota Semarang.</span></li>
+              <li><a href={`https://wa.me/${WA_NUMBER_1}`} target="_blank" rel="noreferrer" className="flex items-center space-x-3 hover:text-rose-400 transition-colors font-bold"><MessageCircle className="h-5 w-5 text-rose-500" /><span>Admin 1 (Rani)</span></a></li>
+              <li><a href={`https://wa.me/${WA_NUMBER_2}`} target="_blank" rel="noreferrer" className="flex items-center space-x-3 hover:text-rose-400 transition-colors font-bold"><MessageCircle className="h-5 w-5 text-rose-500" /><span>Admin 2 (Gizca)</span></a></li>
+              <li><a href={`https://www.instagram.com/${IG_USERNAME}/`} target="_blank" rel="noreferrer" className="flex items-center space-x-3 hover:text-rose-400 transition-colors font-bold"><Instagram className="h-5 w-5 text-rose-500" /><span>Instagram: @asahi_bunkata</span></a></li>
+            </ul>
+          </div>
+          <div>
+             <h3 className="text-lg font-bold mb-6 text-rose-400 underline underline-offset-8 decoration-rose-500/30 uppercase">Jam Buka</h3>
+             <p className="text-sm text-slate-300">Senin - Minggu: 09:00 - 21:00 WIB</p>
+             <p className="text-rose-400 text-xs mt-4 italic">Hari Libur Nasional Tetap Melayani.</p>
+          </div>
+        </div>
+        <div className="border-t border-slate-800 pt-8 text-center text-slate-500 text-[10px] uppercase tracking-widest font-black"><p>&copy; {new Date().getFullYear()} Asahi Bunkata Semarang.</p></div>
+      </footer>
+
+      {/* Floating Buttons & Lupyy AI */}
+      <div className="fixed bottom-6 left-6 z-50">
+        <div className={`fixed bottom-24 left-6 w-80 bg-white rounded-3xl shadow-2xl border border-pink-100 overflow-hidden flex flex-col transition-all duration-300 ${isChatOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-10 scale-95 pointer-events-none'}`}>
+          <div className="bg-rose-500 p-4 text-white font-bold flex justify-between items-center text-sm text-center">
+            <span className="flex items-center"><Sparkles className="w-4 h-4 mr-2" /> Tanya Lupyy AI ✨</span>
+            <button onClick={() => setIsChatOpen(false)}><X className="w-4 h-4" /></button>
+          </div>
+          <div className="h-64 overflow-y-auto p-4 space-y-3 bg-slate-50 text-slate-700 text-[11px]">
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] p-3 rounded-2xl ${m.role === 'user' ? 'bg-rose-500 text-white rounded-tr-none' : 'bg-white border border-pink-100 rounded-tl-none shadow-sm whitespace-pre-wrap'}`}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {isTyping && <div className="text-[10px] text-gray-400 italic flex items-center"><Loader2 className="w-3 h-3 animate-spin mr-1"/> Lupyy mengetik...</div>}
+            {/* Elemen kosong sebagai referensi gulir (scroll) ke pesan terbawah */}
+            <div ref={messagesEndRef} />
+          </div>
+          <form onSubmit={handleSendChatMessage} className="p-3 border-t border-pink-100 flex gap-2 bg-white">
+            <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Tanya sesuatu..." className="flex-1 bg-pink-50 rounded-full px-4 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-rose-400" />
+            <button type="submit" className="p-2 bg-rose-500 text-white rounded-full hover:bg-rose-600 transition-colors"><Send className="w-3 h-3" /></button>
+          </form>
+        </div>
+        <button onClick={() => setIsChatOpen(!isChatOpen)} className="w-16 h-16 bg-white rounded-full shadow-lg border-2 border-pink-200 flex items-center justify-center hover:scale-110 transition-transform overflow-hidden relative group">
+           <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-md relative z-10 pt-2">
+              <circle cx="22" cy="35" r="12" fill="#fbcfe8" /><circle cx="78" cy="35" r="12" fill="#fbcfe8" />
+              <circle cx="50" cy="55" r="36" fill="#f9a8d4" />
+              <ellipse cx="28" cy="62" rx="7" ry="4" fill="#f472b6" opacity="0.6" /><ellipse cx="72" cy="62" rx="7" ry="4" fill="#f472b6" opacity="0.6" />
+              <circle cx="36" cy="52" r="3.5" fill="#334155" /><circle cx="64" cy="52" r="3.5" fill="#334155" />
+              <path d="M 44 60 Q 50 65 56 60" stroke="#334155" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+              <rect x="47" y="61.5" width="3" height="4.5" fill="white" stroke="#334155" strokeWidth="0.5" rx="0.5" /><rect x="50" y="61.5" width="3" height="4.5" fill="white" stroke="#334155" strokeWidth="0.5" rx="0.5" />
+              <path d="M 16 78 Q 50 110 84 78 L 95 105 L 5 105 Z" fill="#db2777" />
+              <path d="M 22 75 L 50 98 L 78 75" stroke="#fbcfe8" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" /><path d="M 78 75 L 50 92" stroke="#fbcfe8" strokeWidth="4" fill="none" strokeLinecap="round" />
+              <g transform="translate(65, 22) rotate(15)" className="animate-pulse">
+                <line x1="-2" y1="10" x2="16" y2="13" stroke="#be185d" strokeWidth="2.5" strokeLinecap="round" />
+                <circle cx="10" cy="2" r="4.5" fill="#ec4899" /><circle cx="17" cy="7" r="4.5" fill="#ec4899" /><circle cx="14" cy="14" r="4.5" fill="#ec4899" /><circle cx="6" cy="14" r="4.5" fill="#ec4899" /><circle cx="3" cy="7" r="4.5" fill="#ec4899" /><circle cx="10" cy="8.5" r="2.5" fill="#fef08a" />
+              </g>
+           </svg>
+           {!isChatOpen && <span className="absolute -top-1 -right-1 flex h-4 w-4"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span><span className="relative inline-flex rounded-full h-4 w-4 bg-rose-500 border-2 border-white"></span></span>}
+        </button>
+      </div>
+
+      {/* Floating Instagram DM Button */}
+      <a href={`https://ig.me/m/${IG_USERNAME}`} target="_blank" rel="noreferrer" className="fixed bottom-6 right-6 z-40 bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-500 text-white p-4 rounded-full shadow-lg hover:scale-110 transition-all flex items-center justify-center group ring-2 ring-white/50">
+        <Instagram className="w-7 h-7" />
+        <span className="max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs group-hover:ml-3 transition-all duration-300 font-bold text-sm tracking-tight uppercase">Chat Admin</span>
+      </a>
+
+      {/* Keranjang Belanja Sidebar */}
+      {isCartOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60]" onClick={() => setIsCartOpen(false)} />
+          <div className="fixed inset-y-0 right-0 w-full md:w-[420px] bg-white shadow-2xl z-[70] flex flex-col animate-in slide-in-from-right">
+            <div className="p-6 border-b border-pink-100 flex justify-between items-center bg-pink-50/50 text-gray-800">
+              <h2 className="text-xl font-extrabold flex items-center tracking-tighter uppercase"><ShoppingCart className="w-5 h-5 mr-2 text-rose-500" /> Daftar Sewa</h2>
+              <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-400 hover:text-rose-500 transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50">
+              {cart.length === 0 ? <div className="text-center py-20 opacity-30 font-black tracking-widest text-slate-400 uppercase">KERANJANG KOSONG</div> : 
+                cart.map(item => (
+                  <div key={item.id} className="flex space-x-4 bg-white p-4 rounded-2xl border border-pink-100 shadow-sm transition-all hover:border-pink-300">
+                    <img src={item.images ? item.images[0] : item.image} alt={item.name} className="w-20 h-20 object-cover rounded-xl shadow-inner" />
+                    <div className="flex-1">
+                      <h4 className="font-bold text-gray-800 text-sm leading-snug mb-1 uppercase tracking-tight">{item.name}</h4>
+                      <p className="text-rose-500 font-bold text-sm mb-3">{formatRupiah(item.price)} <span className="text-[10px] text-gray-400 font-normal">/ 3 Hari</span></p>
+                      <div className="flex items-center space-x-3">
+                        <button onClick={() => updateQuantity(item.id, -1)} className="text-rose-500 p-1 bg-pink-50 rounded-full hover:bg-pink-100 transition-colors"><Minus className="w-3.5 h-3.5"/></button>
+                        <span className="text-sm font-bold w-4 text-center">{item.quantity}</span>
+                        <button onClick={() => updateQuantity(item.id, 1)} disabled={item.quantity >= 1} className={`p-1 rounded-full transition-colors ${item.quantity >= 1 ? 'text-gray-200 bg-slate-50 cursor-not-allowed' : 'text-rose-500 bg-pink-50 hover:bg-pink-100'}`}><Plus className="w-3.5 h-3.5"/></button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              }
+              
+              {/* Teks S&K dengan Checkbox */}
+              {cart.length > 0 && (
+                <>
+                  <div className="bg-white p-5 rounded-2xl border border-pink-100 space-y-4 shadow-sm">
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Pilih Tanggal Sewa</label>
+                      <input type="date" value={rentalDate} onChange={e => setRentalDate(e.target.value)} className="w-full bg-slate-50 border border-pink-100 rounded-xl px-4 py-3 text-sm focus:ring-1 focus:ring-rose-400 outline-none transition-all" />
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <div>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">Durasi Sewa</label>
+                          <p className="text-[9px] text-gray-500 italic mt-0.5 leading-relaxed">Maks 3 hari. Lebih dari itu,<br/>konfirmasi via DM.</p>
+                      </div>
+                      <div className="flex items-center space-x-3 bg-slate-50 border border-pink-100 rounded-full px-3 py-1 shadow-inner">
+                        <button onClick={() => setRentalDays(Math.max(1, rentalDays - 1))} className="text-rose-500 p-1 rounded-full hover:bg-white transition-all"><Minus className="w-4 h-4"/></button>
+                        <span className="text-sm font-bold w-8 text-center">{rentalDays}</span>
+                        <button onClick={() => setRentalDays(Math.min(3, rentalDays + 1))} disabled={rentalDays >= 3} className={`p-1 rounded-full transition-all ${rentalDays >= 3 ? 'text-gray-200 cursor-not-allowed' : 'text-rose-500 hover:bg-white'}`}><Plus className="w-4 h-4"/></button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Caption AI Feature Section */}
+                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-xs font-bold text-indigo-800 flex items-center"><PenTool className="w-3 h-3 mr-1" /> ✨ Buat Caption IG</h4>
+                    </div>
+                    <p className="text-[10px] text-indigo-600 mb-3 leading-relaxed">Penyewaan sudah oke? Biar AI kami bantu buatkan draf caption estetik buat foto-foto kamu nanti!</p>
+                    
+                    <button 
+                      onClick={handleGenerateCaption}
+                      disabled={isCaptionLoading}
+                      className="w-full bg-indigo-500 text-white text-[10px] font-bold py-2 rounded-xl hover:bg-indigo-600 transition-all flex justify-center items-center"
+                    >
+                      {isCaptionLoading ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : 'Generate Caption ✨'}
+                    </button>
+
+                    {igCaption && (
+                      <div className="mt-3 p-3 bg-white rounded-xl border border-indigo-100 text-[10px] text-gray-700 whitespace-pre-wrap max-h-40 overflow-y-auto relative">
+                        {igCaption}
+                        <button 
+                          onClick={() => {navigator.clipboard.writeText(igCaption); alert("Caption berhasil disalin! ✨");}} 
+                          className="absolute top-2 right-2 bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-[8px] font-bold hover:bg-indigo-200 transition-colors"
+                        >
+                          Salin
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {cart.length > 0 && (
+              <div className="p-6 border-t border-pink-100 bg-white shadow-2xl z-20">
+                <div className="flex justify-between items-end mb-4">
+                  <div className="text-xs text-gray-500 font-bold uppercase tracking-widest">Total Estimasi (Flat)</div>
+                  <div className="text-2xl font-black text-rose-500 tracking-tighter leading-none">{formatRupiah(cartTotal)}</div>
+                </div>
+                
+                <label className="mb-4 p-3 bg-rose-50/80 rounded-xl border border-rose-200 flex items-start space-x-3 cursor-pointer group hover:bg-rose-100/50 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-rose-500 cursor-pointer flex-shrink-0"
+                  />
+                  <span className="text-[10px] text-rose-700 font-bold leading-relaxed uppercase tracking-wide">
+                    Saya telah membaca dan menyetujui syarat & ketentuan penyewaan.
+                  </span>
+                </label>
+
+                <button 
+                  onClick={handleCheckout} 
+                  disabled={!rentalDate || checkoutStatus !== '' || !agreedToTerms} 
+                  className={`w-full py-4 rounded-full font-black text-sm flex items-center justify-center space-x-2 transition-all shadow-lg ${
+                    checkoutStatus !== '' ? 'bg-slate-200 text-slate-500' :
+                    (rentalDate && agreedToTerms) ? 'bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500 text-white hover:scale-[1.02]' : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Instagram className="w-6 h-6" />
+                  <span>
+                    {checkoutStatus === 'copying' ? 'Menyalin Teks...' : 
+                     checkoutStatus === 'done' ? 'Disalin! Membuka IG...' : 
+                     !rentalDate ? 'Pilih Tanggal' : 
+                     !agreedToTerms ? 'Centang S&K' : 'Checkout via Instagram'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
